@@ -9,12 +9,7 @@ Telegram-бот для отслеживания доступных дат бро
 pip install -r requirements.txt
 ```
 
-2. Установите ChromeDriver:
-   - Скачайте с https://chromedriver.chromium.org/
-   - Или установите через пакетный менеджер вашей ОС
-   - Убедитесь, что ChromeDriver доступен в PATH
-
-3. Запустите бота:
+2. Запустите бота:
 ```bash
 python main.py
 ```
