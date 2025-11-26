@@ -29,10 +29,14 @@ DAYS_TO_CHECK = 30  # проверяем 30 дней вперед
 
 # Путь к файлу состояния
 _data_dir = Path(__file__).parent / "data"
+_state_in_data = _data_dir / "last_state.json"
+_state_in_root = Path(__file__).with_name("last_state.json")
+
+# По умолчанию сохраняем состояние в data/, если она смонтирована (Docker)
 if _data_dir.exists():
-    STATE_FILE = _data_dir / "last_state.json"
+    STATE_FILE = _state_in_data
 else:
-    STATE_FILE = Path(__file__).with_name("last_state.json")
+    STATE_FILE = _state_in_root
 
 # Глобальные переменные
 last_available_date: Optional[str] = None
@@ -44,18 +48,36 @@ shutdown_event: Optional[asyncio.Event] = None
 
 
 def load_state():
-    """Загружает сохраненное состояние"""
-    global last_available_date, last_slot
-    if not STATE_FILE.exists():
-        return
-    try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        last_available_date = data.get("date")
-        last_slot = data.get("slot")
-        if last_available_date:
-            logger.info(f"Загружено сохранённое состояние: {last_available_date} ({last_slot})")
-    except Exception as e:
-        logger.warning(f"Не удалось загрузить состояние: {e}")
+    """Загружает сохраненное состояние (учитывая возможные пути)"""
+    global last_available_date, last_slot, STATE_FILE
+    candidates = [STATE_FILE]
+    # Добавляем альтернативный путь, если он отличается
+    if STATE_FILE != _state_in_data:
+        candidates.append(_state_in_data)
+    if STATE_FILE != _state_in_root:
+        candidates.append(_state_in_root)
+
+    for path in candidates:
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                last_available_date = data.get("date")
+                last_slot = data.get("slot")
+                STATE_FILE = path
+                # Если загружали из корня, но папка data/ доступна, переносим файл туда
+                if _data_dir.exists() and path != _state_in_data:
+                    try:
+                        _data_dir.mkdir(parents=True, exist_ok=True)
+                        _state_in_data.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                        STATE_FILE = _state_in_data
+                        logger.info(f"Файл состояния перенесен в {_state_in_data}")
+                    except Exception as copy_err:
+                        logger.warning(f"Не удалось перенести состояние в {_state_in_data}: {copy_err}")
+                if last_available_date:
+                    logger.info(f"Загружено сохранённое состояние из {path}: {last_available_date} ({last_slot})")
+                return
+            except Exception as e:
+                logger.warning(f"Не удалось загрузить состояние из {path}: {e}")
 
 
 def save_state(date: Optional[str], slot: Optional[str]):
@@ -68,7 +90,7 @@ def save_state(date: Optional[str], slot: Optional[str]):
             json.dumps({"date": date, "slot": slot}, ensure_ascii=False),
             encoding="utf-8"
         )
-        logger.info(f"Состояние сохранено: {date} ({slot})")
+        logger.info(f"Состояние сохранено ({STATE_FILE}): {date} ({slot})")
     except Exception as e:
         logger.warning(f"Не удалось сохранить состояние: {e}")
 
