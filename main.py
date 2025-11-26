@@ -49,7 +49,7 @@ shutdown_event: Optional[asyncio.Event] = None
 
 def load_state():
     """Загружает сохраненное состояние (учитывая возможные пути)"""
-    global last_available_date, last_slot, STATE_FILE
+    global last_available_date, last_slot, user_chat_id, STATE_FILE
     candidates = [STATE_FILE]
     # Добавляем альтернативный путь, если он отличается
     if STATE_FILE != _state_in_data:
@@ -63,6 +63,7 @@ def load_state():
                 data = json.loads(path.read_text(encoding="utf-8"))
                 last_available_date = data.get("date")
                 last_slot = data.get("slot")
+                user_chat_id = data.get("chat_id", user_chat_id)
                 STATE_FILE = path
                 # Если загружали из корня, но папка data/ доступна, переносим файл туда
                 if _data_dir.exists() and path != _state_in_data:
@@ -74,23 +75,31 @@ def load_state():
                     except Exception as copy_err:
                         logger.warning(f"Не удалось перенести состояние в {_state_in_data}: {copy_err}")
                 if last_available_date:
-                    logger.info(f"Загружено сохранённое состояние из {path}: {last_available_date} ({last_slot})")
+                    logger.info(
+                        f"Загружено сохранённое состояние из {path}: {last_available_date} ({last_slot}), "
+                        f"user_chat_id={user_chat_id}"
+                    )
                 return
             except Exception as e:
                 logger.warning(f"Не удалось загрузить состояние из {path}: {e}")
 
 
-def save_state(date: Optional[str], slot: Optional[str]):
+def save_state(date: Optional[str], slot: Optional[str], chat_id: Optional[int] = None):
     """Сохраняет состояние"""
     if not date:
         return
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        state_payload = {"date": date, "slot": slot}
+        if chat_id:
+            state_payload["chat_id"] = chat_id
         STATE_FILE.write_text(
-            json.dumps({"date": date, "slot": slot}, ensure_ascii=False),
+            json.dumps(state_payload, ensure_ascii=False),
             encoding="utf-8"
         )
-        logger.info(f"Состояние сохранено ({STATE_FILE}): {date} ({slot})")
+        logger.info(
+            f"Состояние сохранено ({STATE_FILE}): {date} ({slot}), user_chat_id={state_payload.get('chat_id')}"
+        )
     except Exception as e:
         logger.warning(f"Не удалось сохранить состояние: {e}")
 
@@ -217,7 +226,7 @@ async def check_and_notify(bot):
             
             last_available_date = latest_date
             last_slot = latest_slot
-            save_state(last_available_date, last_slot)
+            save_state(last_available_date, last_slot, user_chat_id)
             logger.info(f"Последняя доступная дата: {latest_date}")
         else:
             logger.info(f"Доступная дата не изменилась: {latest_date}")
@@ -272,6 +281,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global user_chat_id
     
     user_chat_id = update.effective_chat.id
+    if last_available_date:
+        save_state(last_available_date, last_slot, user_chat_id)
     
     keyboard = [
         [InlineKeyboardButton("🔍 Проверить доступные даты", callback_data="check_dates")]
@@ -289,8 +300,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий на кнопки"""
+    global user_chat_id
     query = update.callback_query
     await query.answer()
+    
+    chat_id = query.message.chat.id if query.message else None
+    if chat_id:
+        user_chat_id = chat_id
+        if last_available_date:
+            save_state(last_available_date, last_slot, user_chat_id)
     
     if query.data == "check_dates":
         await query.edit_message_text("🔍 Проверяю доступные даты...")
